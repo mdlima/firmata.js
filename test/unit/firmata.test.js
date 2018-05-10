@@ -39,6 +39,7 @@ var PULSE_IN = 0x74;
 var PULSE_OUT = 0x73;
 var QUERY_FIRMWARE = 0x79;
 var REPORT_ANALOG = 0xC0;
+var REPORT_ANALOG_CONFIG = 0x7D;
 var REPORT_DIGITAL = 0xD0;
 var REPORT_VERSION = 0xF9;
 var SAMPLING_INTERVAL = 0x7A;
@@ -1219,8 +1220,8 @@ describe("Board: lifecycle", function() {
     assert.ok(new Buffer([0xf0, 0x7a, 0x14, 0x00, 0xf7]).equals(spy.lastCall.args[0]));
 
     // Invalid sampling interval is constrained to a valid interval
-    // > 65535 => 65535
-    board.setSamplingInterval(65540);
+    // > 16383 => 16383
+    board.setSamplingInterval(16390);
     assert.ok(new Buffer([0xf0, 0x7a, 0x7f, 0x7f, 0xf7]).equals(spy.lastCall.args[0]));
 
     // Invalid sampling interval is constrained to a valid interval
@@ -1359,6 +1360,54 @@ describe("Board: lifecycle", function() {
     // Analog reporting turned on...
     assert.deepEqual(transport.lastWrite, [ 193, 1 ]);
 
+    // Single Byte
+    transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF)]);
+    transport.emit("data", [1023 % 128]);
+    transport.emit("data", [1023 >> 7]);
+
+    transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF)]);
+    transport.emit("data", [0 % 128]);
+    transport.emit("data", [0 >> 7]);
+
+    // Multi Byte
+    transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF), 1023 % 128, 1023 >> 7]);
+    transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF), 0 % 128, 0 >> 7]);
+  });
+
+  it("must be able to read value of analog pin in a custom interval", function(done) {
+
+    board.analogReadCustomInterval(1, 1, false, function(value) {});
+    // Regular Analog reporting turned on because interval is 1ms...
+    assert.deepEqual(transport.lastWrite, [ 193, 1 ]);
+
+    board.analogReadCustomInterval(2, 5461, true, function(value) {});
+    // Analog report config sent for 100s...
+    assert.deepEqual(transport.lastWrite, [ START_SYSEX, REPORT_ANALOG_CONFIG, 2, 0x55, 0x6A, END_SYSEX ]);
+    done();
+
+    var counter = 0;
+    var order = [1023, 0, 1023, 0];
+
+    board.analogReadCustomInterval(3, 2, false, function(value) {
+      if (value === 1023) {
+        counter++;
+      }
+      if (value === 0) {
+        counter++;
+      }
+      if (order[0] === value) {
+        order.shift();
+      }
+      if (counter === 4) {
+        assert.equal(order.length, 0);
+        done();
+      }
+    });
+
+    // Analog reporting with custom interval turned on...
+    assert.deepEqual(transport.lastWrite, [ START_SYSEX, 0x7D, 3, 2, 0, END_SYSEX ]);
+
+    // Everything else is the same
     // Single Byte
     transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF)]);
     transport.emit("data", [1023 % 128]);
