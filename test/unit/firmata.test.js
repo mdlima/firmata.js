@@ -13,7 +13,10 @@ var CAPABILITY_QUERY = 0x6B;
 var CAPABILITY_RESPONSE = 0x6C;
 var DIGITAL_MESSAGE = 0x90;
 var END_SYSEX = 0xF7;
-var EXTENDED_ANALOG = 0x6F;
+var EXTENDED_ANALOG_READ = 0x66;
+var EXTENDED_ANALOG_READ_QUERY = 0x00;
+var EXTENDED_ANALOG_READ_RESPONSE = 0x01;
+var EXTENDED_ANALOG_WRITE = 0x6F;
 var I2C_CONFIG = 0x78;
 var I2C_REPLY = 0x77;
 var I2C_REQUEST = 0x76;
@@ -1409,7 +1412,6 @@ describe("Board: lifecycle", function() {
     transport.emit("data", [ANALOG_MESSAGE | (1 & 0xF), 0 % 128, 0 >> 7]);
   });
 
-
   it("must be able to read value of analog pin on a board that skipped capabilities check", function(done) {
     var transport = new SerialPort("/path/to/fake/usb");
     var board = new Board(transport, {skipCapabilities: true, analogPins: [14,15,16,17,18,19]}, initNoop);
@@ -1455,6 +1457,82 @@ describe("Board: lifecycle", function() {
     board.emit("queryfirmware");
   });
 
+  it("must be able to read value of analog pin higher than 15", function(done) {
+    var counter = 0;
+    var order = [1023, 0, -1, 2147483647];
+    var pin = 127;
+    board.analogRead(pin, function(value) {
+      if (order[counter] === value) {
+        counter++;
+      }
+      if (counter === order.length) {
+        done();
+      }
+    });
+    
+    // Analog reporting turned on by EXTENDED_ANALOG_READ...
+    assert.deepEqual(transport.lastWrite, [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_QUERY, pin, 1, END_SYSEX]);
+    
+    // Simple case, 2 Bytes
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [order[0] & 0x7F]);
+    transport.emit("data", [(order[0] >> 7) & 0x7F]);
+    transport.emit("data", [END_SYSEX]);
+    
+    // Special case, no bytes
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin, END_SYSEX]);
+    
+    // -1, one byte, left-most bits are reconstructed
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [0x7F]);
+    transport.emit("data", [END_SYSEX]);
+    
+    // Big positive, all 31 bits
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [0x7F, 0x7F, 0x7F, 0x7F, 0x07]);
+    transport.emit("data", [END_SYSEX]);
+
+    // cleanup
+    board.removeAllListeners("analog-read-" + pin);
+  });
+
+  it("must be able to read value of analog pin without enabling reporting", function(done) {
+    var counter = 0;
+    var order = [1023, 0, -1, 2147483647];
+    var pin = 127;
+    board.extendedAnalogRead(pin, function(value) {
+      if (order[counter] === value) {
+        counter++;
+      }
+      if (counter === order.length) {
+        done();
+      }
+    });
+    
+    // Analog reporting turned on by EXTENDED_ANALOG_READ message
+    assert.deepEqual(transport.lastWrite, [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_QUERY, pin, END_SYSEX]);
+    
+    // Simple case, 2 Bytes
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [order[0] & 0x7F]);
+    transport.emit("data", [(order[0] >> 7) & 0x7F]);
+    transport.emit("data", [END_SYSEX]);
+    
+    // Special case, no bytes
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin, END_SYSEX]);
+    
+    // -1, one byte, left-most bits are reconstructed
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [0x7F]);
+    transport.emit("data", [END_SYSEX]);
+    
+    // Big positive, all 31 bits
+    transport.emit("data", [START_SYSEX, EXTENDED_ANALOG_READ, EXTENDED_ANALOG_READ_RESPONSE, pin]);
+    transport.emit("data", [0x7F, 0x7F, 0x7F, 0x7F, 0x07]);
+    transport.emit("data", [END_SYSEX]);
+
+    board.removeAllListeners("analog-read-" + pin);
+  });
   it("must be able to write a value to a digital output", function(done) {
 
     var write = sandbox.stub(SerialPort.prototype, "write");
@@ -1694,7 +1772,7 @@ describe("Board: lifecycle", function() {
     board.pwmWrite(46, 180);
     assert.deepEqual(transport.lastWrite, [
       START_SYSEX,
-      EXTENDED_ANALOG,
+      EXTENDED_ANALOG_WRITE,
       46, 52, 1,
       END_SYSEX,
     ]);
@@ -1702,7 +1780,7 @@ describe("Board: lifecycle", function() {
     board.pwmWrite(46, 0);
     assert.deepEqual(transport.lastWrite, [
       START_SYSEX,
-      EXTENDED_ANALOG,
+      EXTENDED_ANALOG_WRITE,
       46, 0, 0,
       END_SYSEX,
     ]);
@@ -1710,7 +1788,7 @@ describe("Board: lifecycle", function() {
     board.pwmWrite(46, 0x00004001);
     assert.deepEqual(transport.lastWrite, [
       START_SYSEX,
-      EXTENDED_ANALOG,
+      EXTENDED_ANALOG_WRITE,
       46, 1, 0, 1,
       END_SYSEX,
     ]);
@@ -1718,7 +1796,7 @@ describe("Board: lifecycle", function() {
     board.pwmWrite(46, 0x00200001);
     assert.deepEqual(transport.lastWrite, [
       START_SYSEX,
-      EXTENDED_ANALOG,
+      EXTENDED_ANALOG_WRITE,
       46, 1, 0, 0, 1,
       END_SYSEX,
     ]);
@@ -1726,7 +1804,7 @@ describe("Board: lifecycle", function() {
     board.pwmWrite(46, 0x10000001);
     assert.deepEqual(transport.lastWrite, [
       START_SYSEX,
-      EXTENDED_ANALOG,
+      EXTENDED_ANALOG_WRITE,
       46, 1, 0, 0, 0, 1,
       END_SYSEX,
     ]);
@@ -1736,7 +1814,6 @@ describe("Board: lifecycle", function() {
 
     done();
   });
-
 
   it("must be able to send a string", function(done) {
     var bytes = new Buffer("test string", "utf8");
@@ -1753,6 +1830,7 @@ describe("Board: lifecycle", function() {
     assert.equal(transport.lastWrite[length * 2 + 4], END_SYSEX);
     done();
   });
+
   it("must emit a string event", function(done) {
     board.on("string", function(string) {
       assert.equal(string, "test string");
@@ -1878,6 +1956,7 @@ describe("Board: lifecycle", function() {
     transport.emit("data", [0]);
     transport.emit("data", [END_SYSEX]);
   });
+
   it("can send a pingRead with a pulse out and without a timeout ", function(done) {
     board.pingRead({
       pin: 3,
@@ -2438,6 +2517,7 @@ describe("Board: lifecycle", function() {
     assert.equal(transport.lastWrite[5], END_SYSEX);
     done();
   });
+
   it("must be able to send a 1-wire config with parasitic power disabled", function(done) {
     board.sendOneWireConfig(1, false);
     assert.equal(transport.lastWrite[0], START_SYSEX);
@@ -2448,6 +2528,7 @@ describe("Board: lifecycle", function() {
     assert.equal(transport.lastWrite[5], END_SYSEX);
     done();
   });
+
   it("must be able to send a 1-wire search request and recieve a reply", function(done) {
     board.sendOneWireSearch(1, function(error, devices) {
       assert.equal(devices.length, 1);
@@ -2462,6 +2543,7 @@ describe("Board: lifecycle", function() {
 
     transport.emit("data", [START_SYSEX, PULSE_OUT, ONEWIRE_SEARCH_REPLY, ONEWIRE_RESET_REQUEST_BIT, 0x28, 0x36, 0x3F, 0x0F, 0x52, 0x00, 0x00, 0x00, 0x5D, 0x00, END_SYSEX]);
   });
+
   it("must be able to send a 1-wire search alarm request and recieve a reply", function(done) {
     board.sendOneWireAlarmsSearch(1, function(error, devices) {
       assert.equal(devices.length, 1);
@@ -2476,6 +2558,7 @@ describe("Board: lifecycle", function() {
 
     transport.emit("data", [START_SYSEX, PULSE_OUT, ONEWIRE_SEARCH_ALARMS_REPLY, ONEWIRE_RESET_REQUEST_BIT, 0x28, 0x36, 0x3F, 0x0F, 0x52, 0x00, 0x00, 0x00, 0x5D, 0x00, END_SYSEX]);
   });
+
   it("must be able to send a 1-wire write read", function(done) {
     var _sendOneWireRequest = sandbox.spy(board, "_sendOneWireRequest");
     var handler = sandbox.spy();
@@ -2485,6 +2568,7 @@ describe("Board: lifecycle", function() {
 
     done();
   });
+
   it("must be able to send a 1-wire reset request", function(done) {
     board.sendOneWireReset(1);
 
@@ -2495,6 +2579,7 @@ describe("Board: lifecycle", function() {
 
     done();
   });
+
   it("must be able to send a 1-wire delay request", function(done) {
     var delay = 1000;
 
@@ -2572,6 +2657,7 @@ describe("Board: lifecycle", function() {
 
     done();
   });
+
   it("must be able to send a 1-wire write and read request and recieve a reply", function(done) {
     var device = [40, 219, 239, 33, 5, 0, 0, 93];
     var data = 0x33;
